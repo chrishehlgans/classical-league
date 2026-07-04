@@ -168,6 +168,13 @@ Legend: **[New]** = create file · **[Edit]** = modify existing · **⚠️ unve
 
 **Why first:** De-risks the multi-instance hub layout *and* the bracket-library choice (the compatibility spike below) early, giving an immediately reviewable artifact.
 
+**✅ Implemented.** Status of each deliverable:
+- **Step 0 spike result — fallback triggered.** Both candidates were installed against this repo's React 19.1.0 and tested with `renderToStaticMarkup`:
+  - `react-brackets@0.4.7` — peer dep `react@^17.0.0` (needs `--legacy-peer-deps`). It does render, but its `SeedItem` wrapper ships hardcoded styled-components CSS (`background-color:#1a1d2e; color:#fff`, fixed `#707070` connector borders) with no theme hook — it fights Tailwind dark mode rather than deferring to it. **Fails gate 3.**
+  - `@g-loot/react-tournament-brackets@1.0.31-rc` — peer dep `react@^18.1.0` (needs `--legacy-peer-deps`), plus an undeclared transitive dependency (`react-svg-pan-zoom`) that isn't even listed in its own `package.json` and had to be installed separately to avoid a `MODULE_NOT_FOUND` at render time. Heavier, older, same class of risk.
+  - Neither library cleanly passes gate 1 (both require `--legacy-peer-deps`) and `react-brackets` concretely fails gate 3. Per the plan's own rule ("do not adopt a library that fails any gate"), the **custom fallback was built**: `components/ko-tournament/bracket-tree.tsx` — a one-directional CSS flex layout with connector lines computed at runtime from measured DOM positions (via `ResizeObserver` + `getBoundingClientRect`), so correctness doesn't depend on exact column spacing. No new dependency was added to `package.json`.
+- Brand dropdown switcher, KO overview page, single-tournament bracket page, match/seed card, shared types, and hardcoded fixtures are all implemented — see Files below (all shipped, none skipped).
+
 **Step 0 — Bracket library compatibility spike (do this before writing card UI):**
 Evaluate a candidate library (see [Bracket Library Selection](#bracket-library-selection)) against three gates: (1) installs & runs on **React 19.1.0** (note any `--legacy-peer-deps`/overrides needed), (2) supports a **fully custom match/seed component** so we can render seeds + per-game score (`1.5–0.5`) + tiebreak badge, (3) respects **Tailwind 4 dark mode** without fighting its own styling. **If a library passes → use it. If none passes → fall back** to a custom `bracket-tree.tsx` (one-directional, or the center-converging butterfly as originally envisioned).
 
@@ -191,6 +198,42 @@ Evaluate a candidate library (see [Bracket Library Selection](#bracket-library-s
 - A bracket library is chosen via the documented compatibility spike (or the fallback is triggered with the reason recorded).
 - Brand dropdown switches sections and swaps nav items; League behaviour unchanged when in league mode.
 - `/ko-tournament` shows an overview grid of multiple instances; clicking one opens `/ko-tournament/[slug]` with a one-directional bracket, match cards showing aggregate game scores, responsive + dark-mode correct.
+
+---
+
+### Chunk 1.1 — Tabs on the Tournament Rules page (Classical League + KO)  ·  **Size: S**
+**Goal:** Turn the single-format Rules page into a **two-tab** page — **"Classical League"** and **"KO Tournament"**. The KO tab reuses the League page's exact look and section structure, with only the details adjusted for knockout play.
+
+**Why here:** Pure static content, no backend — a natural companion to the Chunk 1 nav/UI work and independently shippable. It also gives players a place to read KO rules the moment the KO section appears in the nav.
+
+**Current state:** [`app/rules/page.tsx`](app/rules/page.tsx) is a single static **server component** (header + TL;DR box + sectioned cards: Format, Schedule, Playing, Recording, Reporting, FIDE chess rules, Conduct, Agreement). No tabs today.
+
+**Approach:** Extract the existing content into a `LeagueRules` component (verbatim), add a sibling `KnockoutRules` component with the same layout, and wrap both in a tab shell. **URL-driven tabs** via a search param (`/rules?format=league|ko`) so tabs are deep-linkable, SSR-friendly, and controllable from the nav; the tab bar is a small `'use client'` component that updates the param while the content stays server-rendered. Default tab = `league` when no param is present.
+
+**Confirmed — nav integration:** the **"Rules" nav link is context-aware**: in **KO nav mode** it points to `/rules?format=ko`; in League mode it points to `/rules` (League tab). This is why URL-driven tabs (not a plain `useState` toggle) are required — the nav must be able to preselect the tab via the link.
+
+**KO tab — sections mirrored from the League, details adjusted:**
+- **Format:** single-elimination bracket (not Swiss); **each match = N games, default 2 (double round)**; winner by aggregate score; top seeds may receive Round-1 byes.
+- **Scoring:** per-game 1 / 0.5 / 0; **match won on aggregate**; **tie → tiebreak** (v1: organiser decides; automated tiebreak "coming soon").
+- **Schedule:** bracket rounds (Round of N → … → Final), advance-or-out; no biweekly Swiss cadence.
+- **Byes:** *seeding* byes (top seeds skip Round 1) — distinct from the League's absence byes.
+- **Reporting results:** **organiser/admin-entered only** — no player submission form; PGN/broadcast noted as "coming soon".
+- **Reused as-is:** FIDE chess rules, Conduct & Fair Play, Agreement (identical — candidates to extract into a shared sub-component to avoid duplication).
+
+**Files:**
+- **[Edit]** `app/rules/page.tsx` — becomes the tab shell: reads the active tab (search param), renders the tab bar + the selected content component.
+- **[New]** `components/rules/rules-tabs.tsx` — `'use client'` tab bar (League / KO), updates the `?format=` param and highlights the active tab.
+- **[New]** `components/rules/league-rules.tsx` — the existing Rules content, extracted verbatim.
+- **[New]** `components/rules/knockout-rules.tsx` — KO rules, same visual structure as the League page, details per above.
+- **[New]** `components/rules/shared-chess-rules.tsx` — *optional* extraction of the identical FIDE-rules / conduct / agreement sections shared by both tabs.
+- **[Edit]** `components/navigation.tsx` — make the "Rules" link context-aware: `/rules?format=ko` in KO nav mode, `/rules` otherwise. *(Coordinates with the Chunk 1 `navMode` work.)*
+
+**Not certain about:**
+- ⚠️ Exact KO rule wording (bye/tiebreak specifics) — placeholder copy until the organiser confirms; flagged for review.
+
+**Success criteria:**
+- `/rules` shows two tabs; League tab is byte-for-byte the current page; KO tab mirrors its layout with knockout details; deep-linkable via `?format=`; responsive + dark-mode correct.
+- Opening "Rules" from **KO nav mode** lands on the **KO tab**; from League mode it lands on the League tab.
 
 ---
 
@@ -318,8 +361,10 @@ Chunk 2 (engine) ─────┤                          │
         │             └─> Chunk 7 (pairings UI)  │
         v                      ^                  │
 Chunk 3 (schema) ─> Chunk 4 (admin create) ─> Chunk 5 (results/advance)
+
+Chunk 1.1 (Rules tabs) — standalone, no dependencies
 ```
-Chunks 1 and 2 are independent and can proceed in parallel. Everything from Chunk 4 on depends on Chunk 3.
+Chunks 1, 1.1 and 2 are independent and can proceed in parallel. Chunk 1.1 (static Rules content) has no dependency on anything else. Everything from Chunk 4 on depends on Chunk 3.
 
 ---
 
@@ -448,6 +493,7 @@ Deliberately **out of the core MVP path**; each is independently shippable after
 ## Suggested Delivery Order (recap)
 
 1. **Chunk 1** — Nav switcher + multi-instance overview + MVP bracket (library spike, static) → *reviewable demo*
+1.1 **Chunk 1.1** — Tabs on the Rules page (League + KO), static content → *shippable independently*
 2. **Chunk 2** — Bracket engine + tests → *proven pairing math*
 3. **Chunk 3** — Schema + persistence (incl. `KnockoutGame`, `gamesPerRound`) → *data foundation*
 4. **Chunk 4** — Admin create (settings dialog) + participants

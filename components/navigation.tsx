@@ -1,8 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { useState, useEffect } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
+import { useState, useEffect, useRef } from 'react'
 import { tournamentConfig } from '@/lib/tournament-config'
 
 // Navigation items that are always visible
@@ -22,7 +22,7 @@ const activeSeasonNavigation = [
 ]
 
 // Build navigation based on season status
-const navigation = tournamentConfig.isSeasonActive
+const leagueNavigation = tournamentConfig.isSeasonActive
   ? [
       baseNavigation[0], // Home
       activeSeasonNavigation[0], // Register
@@ -35,17 +35,48 @@ const navigation = tournamentConfig.isSeasonActive
     ]
   : baseNavigation
 
+// Navigation items shown while browsing the KO Tournaments section
+const koNavigation = [{ name: 'KO Tournaments', href: '/ko-tournament' }]
+
+// The two "products" the brand dropdown switches between
+const brandOptions = [
+  { mode: 'league' as const, label: '♛ K4 Classical League', href: '/' },
+  { mode: 'ko' as const, label: '🏆 KO Tournaments', href: '/ko-tournament' },
+]
+
 function classNames(...classes: string[]) {
   return classes.filter(Boolean).join(' ')
 }
 
 export function Navigation() {
   const pathname = usePathname()
+  const router = useRouter()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [brandMenuOpen, setBrandMenuOpen] = useState(false)
+  const brandMenuRef = useRef<HTMLDivElement>(null)
+
+  // Which section is active is derived from the URL, so the brand dropdown
+  // is a navigational switch rather than persisted client state.
+  const navMode = pathname.startsWith('/ko-tournament') ? 'ko' : 'league'
+  const navigation = navMode === 'ko' ? koNavigation : leagueNavigation
+  const activeBrand = brandOptions.find((option) => option.mode === navMode)!
+
+  // Close brand dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (brandMenuRef.current && !brandMenuRef.current.contains(event.target as Node)) {
+        setBrandMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   // Close mobile menu when route changes
   useEffect(() => {
     setMobileMenuOpen(false)
+    setBrandMenuOpen(false)
   }, [pathname])
 
   // Close mobile menu on escape key
@@ -75,10 +106,50 @@ export function Navigation() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <Link href="/" className="text-white font-bold text-xl hover:text-gray-300 transition-colors">
-                ♛ K4 Classical League
-              </Link>
+            <div className="flex-shrink-0 relative" ref={brandMenuRef}>
+              <button
+                type="button"
+                onClick={() => setBrandMenuOpen(!brandMenuOpen)}
+                className="flex items-center gap-1.5 text-white font-bold text-xl hover:text-gray-300 transition-colors"
+                aria-haspopup="true"
+                aria-expanded={brandMenuOpen}
+              >
+                {activeBrand.label}
+                <svg
+                  className={`w-4 h-4 transition-transform duration-200 ${brandMenuOpen ? 'rotate-180' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {brandMenuOpen && (
+                <div className="absolute left-0 mt-2 w-64 bg-white dark:bg-gray-700 rounded-md shadow-lg ring-1 ring-black ring-opacity-5 py-1 z-50">
+                  {brandOptions.map((option) => (
+                    <button
+                      key={option.mode}
+                      type="button"
+                      onClick={() => {
+                        setBrandMenuOpen(false)
+                        if (option.mode !== navMode) {
+                          router.push(option.href)
+                        }
+                      }}
+                      className={classNames(
+                        'w-full text-left px-4 py-2 text-sm font-medium transition-colors',
+                        option.mode === navMode
+                          ? 'text-indigo-600 dark:text-indigo-400'
+                          : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600'
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="hidden lg:block">
               <div className="ml-10 flex items-baseline space-x-4">
@@ -161,6 +232,23 @@ export function Navigation() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
+        </div>
+        <div className="px-2 py-3 border-b border-gray-700">
+          {brandOptions.map((option) => (
+            <Link
+              key={option.mode}
+              href={option.href}
+              className={classNames(
+                option.mode === navMode
+                  ? 'bg-gray-900 text-white'
+                  : 'text-gray-300 hover:bg-gray-700 hover:text-white',
+                'block rounded-md px-3 py-3 text-base font-medium transition-colors duration-200'
+              )}
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              {option.label}
+            </Link>
+          ))}
         </div>
         <div className="px-2 py-3">
           {navigation.map((item) => (
