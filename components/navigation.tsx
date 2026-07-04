@@ -36,7 +36,7 @@ const leagueNavigation = tournamentConfig.isSeasonActive
   : baseNavigation
 
 // Navigation items shown while browsing the KO Tournaments section
-const koNavigation = [{ name: 'KO Tournaments', href: '/ko-tournament' }]
+const koNavigation = [{ name: 'Home', href: '/ko-tournament' }]
 
 // The two "products" the brand dropdown switches between
 const brandOptions = [
