@@ -11,7 +11,7 @@ npm run setup:local
 ```
 
 This automated script will:
-- ✅ Check Node.js version (requires 20+)
+- ✅ Check Node.js version (requires 22.5+, since `prisma dev` depends on the `node:sqlite` built-in — Node 24 LTS recommended)
 - 🚀 Start Prisma dev server automatically
 - 📝 Update your `.env` file with connection string
 - 📦 Install dependencies
@@ -35,21 +35,27 @@ npm run db:dev
 
 You'll see output like:
 ```
-✔ Great Success! 😉👍
-Your prisma dev server classical-league is ready and listening on ports 51213-51215.
+✔  Your local Prisma Postgres server classical-league is now running 👍
 
-DATABASE_URL="prisma+postgres://localhost:51213/?api_key=..."
+🔌 To connect with Prisma ORM use the following connection strings:
+
+   DATABASE_URL="postgres://postgres:postgres@localhost:51214/template1?sslmode=disable&connection_limit=10&connect_timeout=0&max_idle_connection_lifetime=0&pool_timeout=0&socket_timeout=0"
+   SHADOW_DATABASE_URL="postgres://postgres:postgres@localhost:51215/template1?sslmode=disable&connection_limit=10&connect_timeout=0&max_idle_connection_lifetime=0&pool_timeout=0&socket_timeout=0"
 ```
+
+(Older Prisma CLI versions instead print a single `DATABASE_URL="prisma+postgres://localhost:51213/?api_key=..."` proxy URL — either format works, but the plain `postgres://` pair above is what current versions output.)
+
+`SHADOW_DATABASE_URL` is only needed if you run `prisma migrate dev` — this project's `schema.prisma` doesn't declare a `shadowDatabaseUrl`, so it isn't used and can be ignored/discarded.
 
 ### Step 2: Update Environment
 
-Copy the `DATABASE_URL` from the output above and update your `.env` file:
+Copy `DATABASE_URL` from the output above into your `.env` file, and append `&pgbouncer=true` to it — this is required to avoid a `prepared statement already exists` error when seeding (see Troubleshooting):
 
 ```bash
 # Copy example file if needed
 cp .env.example .env
 
-# Then edit .env and paste the DATABASE_URL
+# Then edit .env and paste the DATABASE_URL, adding &pgbouncer=true to the end
 ```
 
 ### Step 3: Run Manual Setup
@@ -135,15 +141,21 @@ npm run setup:manual
 
 ## Troubleshooting
 
-### "Node.js 20 or later required"
-Update Node.js to version 20+. Check with: `node --version`
+### "Node.js 20 or later required" / "Node.js 22.5 or later required"
+Update Node.js to version 22.5+ (24 LTS recommended). Check with: `node --version`
+
+### "ERROR No such built-in module: node:sqlite"
+`npm run db:dev` requires Node's built-in `node:sqlite` module, only available on Node 22.5+ (experimental) or Node 24.8+ (stable). If you're on Node 20 or an older Node 22 patch version, this crashes on startup. Install a newer Node LTS (e.g. via `nvm install --lts`) and re-run `npm run db:dev`.
+
+### "prepared statement \"sN\" already exists" (Postgres error 42P05) during seeding
+This is a PgBouncer-style connection-pooling collision with the local `prisma dev` Postgres server. Fix by appending `&pgbouncer=true` to `DATABASE_URL` in `.env`, then re-run `npm run db:seed` (or `npm run setup:manual`).
 
 ### "Connection string not found"
 Make sure Prisma dev server is running first:
 ```bash
 npm run db:dev
 ```
-Then copy the `DATABASE_URL` to your `.env` file.
+Then copy the `DATABASE_URL` to your `.env` file, appending `&pgbouncer=true`.
 
 ### "Migration failed"
 Reset your database:

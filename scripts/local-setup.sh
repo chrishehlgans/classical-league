@@ -48,7 +48,7 @@ else
 fi
 
 # Check if Prisma dev server is configured
-if grep -q "prisma+postgres://localhost" .env; then
+if grep -qE 'DATABASE_URL="(prisma\+)?postgres(ql)?://' .env; then
     print_success "Prisma dev server is configured in .env"
 
     # Generate Prisma client
@@ -82,11 +82,11 @@ else
     echo "  1. Open a new terminal window"
     echo "  2. Run: npx prisma dev"
     echo "  3. Copy the DATABASE_URL from the output"
-    echo "  4. Update your .env file with the DATABASE_URL"
+    echo "  4. Update your .env file with it, appending &pgbouncer=true"
     echo "  5. Run this script again: npm run setup:local"
     echo ""
     print_info "Example DATABASE_URL format:"
-    echo '  DATABASE_URL="prisma+postgres://localhost:51213/?api_key=..."'
+    echo '  DATABASE_URL="postgres://postgres:postgres@localhost:51214/template1?...&pgbouncer=true"'
     exit 0
 fi
 

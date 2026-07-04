@@ -55,7 +55,8 @@
       "Bash(npm audit:*)",
       "Bash(mkdir:*)",
       "WebFetch(domain:deepwiki.com)",
-      "WebFetch(domain:official-stockfish.github.io)"
+      "WebFetch(domain:official-stockfish.github.io)",
+      "Bash(npm --version)"
     ],
     "deny": [],
     "ask": []

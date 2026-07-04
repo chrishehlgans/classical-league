@@ -26,10 +26,12 @@ const log = {
 
 async function checkNodeVersion() {
   const nodeVersion = process.version;
-  const majorVersion = parseInt(nodeVersion.slice(1).split('.')[0]);
+  const [majorVersion, minorVersion] = nodeVersion.slice(1).split('.').map(Number);
 
-  if (majorVersion < 20) {
-    log.error(`Node.js ${nodeVersion} detected. Prisma dev requires Node.js 20 or later.`);
+  // prisma dev depends on the node:sqlite built-in, only available on Node 22.5+
+  const tooOld = majorVersion < 22 || (majorVersion === 22 && minorVersion < 5);
+  if (tooOld) {
+    log.error(`Node.js ${nodeVersion} detected. Prisma dev requires Node.js 22.5 or later (24 LTS recommended).`);
     process.exit(1);
   }
   log.success(`Node.js ${nodeVersion} - compatible with Prisma dev`);
@@ -91,11 +93,18 @@ async function updateEnvFile(connectionString) {
 
   let envContent = fs.readFileSync(envPath, 'utf8');
 
+  // Append pgbouncer=true to avoid "prepared statement already exists" errors
+  // when seeding against the local prisma dev Postgres server
+  const separator = connectionString.includes('?') ? '&' : '?';
+  const finalConnectionString = connectionString.includes('pgbouncer=true')
+    ? connectionString
+    : `${connectionString}${separator}pgbouncer=true`;
+
   // Replace the DATABASE_URL line
   if (envContent.includes('DATABASE_URL=')) {
-    envContent = envContent.replace(/DATABASE_URL="[^"]*"/, `DATABASE_URL="${connectionString}"`);
+    envContent = envContent.replace(/DATABASE_URL="[^"]*"/, `DATABASE_URL="${finalConnectionString}"`);
   } else {
-    envContent += `\nDATABASE_URL="${connectionString}"\n`;
+    envContent += `\nDATABASE_URL="${finalConnectionString}"\n`;
   }
 
   fs.writeFileSync(envPath, envContent);
