@@ -4,6 +4,7 @@ import type {
   KnockoutParticipant,
   KnockoutMatch,
 } from './ko-tournament-types'
+import { assignSeeds, buildBracket } from './ko-bracket-generator'
 
 /**
  * HARDCODED FIXTURE DATA — Chunk 1 MVP only.
@@ -430,10 +431,65 @@ const winterBulletCup: KnockoutTournament = {
   thirdPlaceMatchData: null,
 }
 
+// ---------------------------------------------------------------------------
+// Tournament 4: "K4 Spring Classical Knockout" — IN_PROGRESS, 11 players.
+//
+// Unlike the three tournaments above (all hand-authored, all exactly 8
+// players), this one's bracket is *computed* by the Chunk 2 engine
+// (lib/ko-bracket-generator.ts) from a plain participant list. It exercises
+// the engine's highest-risk logic that a power-of-2 field never touches:
+// 11 players pads to a 16-slot bracket, so the top 5 seeds get Round-1 byes.
+// ---------------------------------------------------------------------------
+
+const springRawParticipants = [
+  { id: 'sc-p1', name: 'Wei Anand', rating: 2210 },
+  { id: 'sc-p2', name: 'Ingrid Karpov', rating: 2175 },
+  { id: 'sc-p3', name: 'Tomas Short', rating: 2140 },
+  { id: 'sc-p4', name: 'Amara Polgar', rating: 2110 },
+  { id: 'sc-p5', name: 'Felix Ivanchuk', rating: 2080 },
+  { id: 'sc-p6', name: 'Hana Kramnik', rating: 2050 },
+  { id: 'sc-p7', name: 'Oskar Topalov', rating: 2020 },
+  { id: 'sc-p8', name: 'Lucia Grischuk', rating: 1990 },
+  { id: 'sc-p9', name: 'Dmitri Leko', rating: 1960 },
+  { id: 'sc-p10', name: 'Nadia Shirov', rating: 1930 },
+  { id: 'sc-p11', name: 'Pablo Aronian', rating: 1900 },
+]
+
+const springSeeded = assignSeeds(springRawParticipants, 'RATING')
+const springBracket = buildBracket(springSeeded, {
+  gamesPerRound: 2,
+  thirdPlaceMatch: true,
+  idPrefix: 'sc',
+})
+
+const springClassicalKnockout: KnockoutTournament = {
+  id: 'ko-spring-classical-2026',
+  slug: 'spring-classical-2026',
+  name: 'K4 Spring Classical Knockout',
+  status: 'IN_PROGRESS',
+  format: 'SINGLE_ELIMINATION',
+  bracketSize: springBracket.bracketSize,
+  gamesPerRound: 2,
+  thirdPlaceMatch: true,
+  enableGameRecording: false,
+  startDate: '2026-09-05',
+  timeControl: '30+30',
+  participants: springSeeded.map((participant) => ({
+    id: participant.id,
+    name: participant.name,
+    seed: participant.seed,
+    rating: participant.rating,
+    isEliminated: false,
+  })),
+  rounds: springBracket.rounds,
+  thirdPlaceMatchData: springBracket.thirdPlaceMatchData,
+}
+
 export const koTournamentFixtures: KnockoutTournament[] = [
   summerBlitzKnockout,
   autumnRapidKnockout,
   winterBulletCup,
+  springClassicalKnockout,
 ]
 
 function findWinnerName(tournament: KnockoutTournament): string | null {

@@ -44,6 +44,7 @@ These were previously open questions. To keep momentum, the plan adopts sensible
 | **Bracket rendering** | **Third-party library, one-directional (L→R)** | Confirmed. Don't hand-roll a standard bracket. Trades away the center-final "butterfly" look (no lib supports it). **Library must pass a compatibility check** (React 19 + custom cards + Tailwind dark mode) — see [Bracket Library Selection](#bracket-library-selection). Custom butterfly kept as fallback only. |
 | **What is recorded** | **Match result only** (no games/PGN) | Confirmed. Full game recording + Lichess broadcast is a **"Coming soon"** create toggle; see dedicated section. |
 | **Result entry location** | **Admin panel only** | Confirmed. Public/user UI is read-only; no player-facing result submission. |
+| **Participant registration** | **Public self-registration + admin approval** (mirrors League) | Confirmed. Register CTA shows only while `status = REGISTRATION`; entries start `isApproved = false`; admin approves in Chunk 4. Supports **"select from existing player"** (reuses `SearchablePlayerDropdown`) — a capability the League registration itself does *not* have. |
 | **Bracket size** | Any power of 2 (flexible) | Confirmed. Engine pads to next power of 2 ≥ player count. |
 | **Odd / non-power-of-2 players** | **Top seeds get Round-1 byes** | Confirmed. `byes = bracketSize − N`, assigned to the highest seeds; they enter in Round 2. |
 | **Pairing mode** | **Auto-seed + admin override** | Confirmed. Engine proposes; admin can reassign before publishing. |
@@ -94,10 +95,15 @@ Tournament-level settings — the "create tournament" configuration surface.
 |-------|------|-------|
 | `id` | String (cuid) | PK |
 | `tournamentId` | String | FK |
-| `playerId` | String? | **Nullable** optional link to League `Player` |
+| `playerId` | String? | **Nullable** optional link to League `Player` (set when registered via "select existing player"). |
 | `name` | String | Denormalised display name (works without a `Player`) |
+| `email` | String? | Captured on self-registration (Chunk 1.2); null for admin-added. |
+| `phoneNumber` | String? | Captured on self-registration; null for admin-added. |
 | `rating` | Int? | For `RATING` seeding |
 | `seed` | Int? | Assigned at seeding time |
+| `isApproved` | Boolean @default(false) | **Approval gate** — mirrors `Player.isApproved`. Self-registrations start `false`; admin-added can be created `true`. Unapproved participants never enter seeding/bracket. |
+| `registrationDate` | DateTime @default(now()) | When the participant registered / was added. |
+| `approvedDate` | DateTime? | Set when an admin approves. |
 | `isEliminated` | Boolean | |
 | `eliminatedInRoundId` | String? | For "reached Quarterfinal" style stats |
 | `@@unique([tournamentId, seed])` | | One seed per tournament |
@@ -237,23 +243,92 @@ Evaluate a candidate library (see [Bracket Library Selection](#bracket-library-s
 
 ---
 
+### Chunk 1.2 — Participant self-registration UI (with admin approval)  ·  **Size: M**
+**Goal:** When a tournament is **open for registration** (`status = REGISTRATION`, not yet started), the public tournament page shows a **"Register"** call-to-action leading to a **registration form**. Registrations are created **pending admin approval** (approved in Chunk 4), exactly like the League. Where possible, reuse the League's registration patterns rather than reinventing them.
+
+**Directly mirrors the League** — see the *Findings* note at the end of this doc. Reuse:
+- **Form stack:** React-Hook-Form + Zod (`zodResolver`), the same field/label/error markup and success + "next steps" view as [`app/players/register/page.tsx`](app/players/register/page.tsx).
+- **Approval model:** create the participant with `isApproved = false`; admin approves later (mirrors `Player.isApproved` + `POST /api/admin/players/[id]/approve`).
+- **Email (optional):** non-blocking `sendEmailSafe(...)` for registrant + admin notification, mirroring the League's `lib/email.ts` calls. *(Optional for MVP; can piggyback the game-recording/email add-on.)*
+
+**Registration gating:**
+- The **"Register" CTA** renders only when `tournament.status === 'REGISTRATION'`. It disappears once `IN_PROGRESS`/`COMPLETED`. Shown on both the overview card and the `[slug]` bracket page.
+- Direct visits to the register route when registration is closed show a friendly "registration is closed" state (no form).
+
+**Two registration modes (single form, a toggle):**
+1. **New participant** — free-entry fields: name, email, phone, rating (mirrors the League form, minus League-only bits like the nickname generator unless we want it).
+2. **Select from an existing player** — reuse the existing [`components/SearchablePlayerDropdown.tsx`](components/SearchablePlayerDropdown.tsx) to pick a player already in the DB; selecting one **prefills name/rating and sets `KnockoutParticipant.playerId`**. *(This "select existing" capability does **not** exist in the League's own registration today — the League always creates a brand-new player — but the dropdown component and its `GET /api/players` data source already exist and are reused here.)*
+
+**Files (this chunk = UI + validation):**
+- **[New]** `app/ko-tournament/[slug]/register/page.tsx` — the registration page (gated on `REGISTRATION` status).
+- **[New]** `components/ko-tournament/participant-register-form.tsx` — the form (RHF + Zod), with the new-vs-existing toggle.
+- **[Reuse]** `components/SearchablePlayerDropdown.tsx` — for the "select existing player" mode (no changes expected; ⚠️ confirm the players endpoint it reads returns the pool we want — see below).
+- **[Edit]** `lib/validations.ts` — add `knockoutParticipantRegistrationSchema` (new-participant fields **or** an existing `playerId`).
+- **[Edit]** `components/ko-tournament/tournament-card.tsx` + `app/ko-tournament/[slug]/page.tsx` — conditionally render the "Register" CTA when status is `REGISTRATION`.
+
+**Backend dependencies (implemented in later chunks, called out here):**
+- **Chunk 3 (schema):** `KnockoutParticipant` gains registration/approval fields — `email?`, `phoneNumber?`, `isApproved` (default false), `registrationDate`, `approvedDate?` (and keeps the optional `playerId` link). See the updated model.
+- **Chunk 4 (admin + endpoints):** public `POST /api/ko-tournament/[slug]/register` (creates a pending participant) **and** the admin **approval queue** (approve/reject), mirroring the League. Until these land, the MVP form can submit to a stub.
+
+**Not certain about:**
+- ⚠️ **Which "existing players" pool** to offer. The League's `GET /api/players` returns **approved, non-withdrawn players of the *active League season*** (shape `{id, firstName, nickname, lastInitial, …}`). Reusing it ties KO participants to the current League season — which overlaps the deferred **Data scope** decision. Alternative: a KO-specific players endpoint. Flagged for that decision.
+- ⚠️ Whether KO registration needs the League's nickname generator / rules-accept checkbox, or a slimmer field set. Default: slimmer (name, email, phone, rating) unless requested.
+
+**Success criteria:**
+- A tournament in `REGISTRATION` shows a "Register" CTA; a started/finished one does not.
+- The form validates via Zod and supports both **new participant** and **select-existing-player** modes; the latter reuses `SearchablePlayerDropdown` and captures `playerId`.
+- Submissions create participants **pending approval** (once the Chunk 3/4 backend lands); nothing appears in the bracket until an admin approves.
+
+---
+
 ### Chunk 2 — Bracket engine (pure functions, unit-tested, no DB)  ·  **Size: M**
 **Goal:** Implement the deterministic bracket math in isolation: standard seeding order, next-power-of-2 padding, bye assignment to top seeds, round naming, and construction of the `nextMatchId` linked structure. Feed Chunk 1's page with *computed* fixtures instead of hardcoded ones.
 
 **Why here:** Highest-risk logic (non-power-of-2 byes, seed ordering). Building it as pure functions makes it fully unit-testable before persistence exists, and it informs the final schema.
 
+**✅ Implemented.** Status of each deliverable:
+- `lib/ko-bracket-generator.ts` ships `computeBracketSize`, `standardSeedOrder`, `assignByes`, `assignSeeds` (RATING/RANDOM/MANUAL — not in the original file list, added because `buildBracket` needs seeded input and this is the natural place to produce it), and `buildBracket`. Pure TypeScript, zero dependencies, no Prisma/`fs`/`'use server'` imports.
+- **No test runner added.** The repo has no test environment configured, and rather than introducing Vitest for one module, `scripts/ko-bracket-engine-demo.ts` (run via `npm run ko:verify-bracket-engine`, using the already-installed `tsx`) drives every exported function with explicit inputs and asserts on the outputs — 924 checks across bracket sizes 2 through 128, gamesPerRound validation, seeding methods, and third-place-match handling — printing a pass/fail summary and exiting non-zero on failure. This supersedes the originally-planned `lib/__tests__/ko-bracket-generator.test.ts`; revisit with real Vitest unit tests once a test runner is adopted repo-wide.
+- `lib/ko-tournament-fixtures.ts` gained a 4th tournament ("K4 Spring Classical Knockout", 11 players) generated end-to-end by the engine — the first fixture to exercise the non-power-of-2 bye path (5 byes into a 16-slot bracket) that the three hand-authored 8-player fixtures never touched. The original three fixtures were left as-is; they encode specific hand-crafted narratives (a tiebreak, an in-progress round, a not-yet-generated bracket) not worth re-deriving through the engine.
+- `app/ko-tournament/page.tsx` needed no changes — it already just maps over `koTournamentSummaries`, which picks up the new engine-generated fixture automatically.
+
+#### Architecture — is it OK to build this "backend" logic inside the Next.js app? **Yes.**
+This engine is **pure, deterministic computation with zero I/O**, and generating a bracket for ≤1024 players is microsecond-level work — there is **no CPU, scaling, or latency reason to extract a separate service**. A standalone backend would only add a network hop, another runtime/deploy, and cross-repo coordination for no benefit. The existing app already runs *all* its backend logic (approval workflows, result verification) in **Next.js API routes / server actions + Prisma** — this stays consistent with that. The correct discipline here is **layering inside the app, not splitting services**:
+
+- **`lib/ko-bracket-generator.ts` (this chunk)** — pure functions, **no Prisma / `fs` / `'use server'`**, no I/O. Runs anywhere, unit-testable in isolation, and portable (could even run client-side for a preview — a bonus, not a requirement).
+- **`lib/ko-tournament.ts` (Chunk 3)** — persistence/orchestration; imports Prisma; **server-only**.
+- **API routes / server actions (Chunks 4–7)** — the HTTP boundary + admin-auth guard; the only place mutations happen.
+
+Net: the "strictly backend" concern (persisted state, guarded mutations) is satisfied by keeping those in the server layer, while the pure math stays dependency-free and testable. **No microservice.**
+
+#### Implementation approach & stack
+**Recommended: hand-written pure TypeScript in `lib/`, no runtime dependency.** The math is small and well-understood — standard seed "fold" order, pad to next power of 2 with `BYE` placeholders opposite the top seeds, then link each match to its `nextMatch`. It's ~100–150 LOC, we fully control the output shape to match our Prisma models **and** our non-standard **multi-game aggregate scoring** (0.5-point draws), and it keeps the correctness-critical core free of dependency/licensing/maintenance risk. Tested with **Vitest**.
+
+#### Library options (researched — optional, **not** must-haves)
+Real libraries cover parts of this. None is required; noted so the choice is informed. **For Chunk 2 alone, custom wins** (small, controlled, no license/scoring friction). The one scenario where a library makes sense is an *architecture-level* decision to standardise the **whole** KO stack (render + logic + propagation) on one ecosystem — decide that during the Chunk 1 [library spike](#bracket-library-selection), not here.
+
+| Library | Covers | License | Maint. | Fit / caveats |
+|---------|--------|---------|--------|---------------|
+| **`tournament-pairings`** | Bracket **generation** (single/double elim, swiss, round-robin, stepladder). Returns `{round, match, player1, player2, win?, loss?}` where `win`/`loss` point to the next match — **maps almost 1:1 onto our `nextMatch` links**. Handles byes + seeding (`ordered`). | **GPL-3.0** ⚠️ | Stale (v1.5, Jan 2023) | Closest to our `buildBracket` output. But **GPL-3.0 is copyleft** — flag for the club/app's licensing stance before adopting. ESM-only (fine). We'd still layer multi-game scoring on top. |
+| **`brackets-manager.js`** (+ `brackets-viewer.js`) | The heavyweight all-in-one: generation + **automatic BYE** + inner/outer **seeding** + **result propagation** + a matching **viewer** (cross-refs Chunk 1 render *and* Chunk 5 advancement). | **MIT** ✅ | Active (v1.11.0, May 2026; 400+ commits) | Strong *if* we standardise the whole stack on it. Cost: adopt its `brackets-model` data shape + write a **Prisma storage adapter** (its `Storage` interface supports SQL). ⚠️ Its match "child games"/best-of model likely **won't express chess aggregate-with-draws** cleanly; third-place/consolation-final support for single-elim needs verifying. |
+
+**Recommendation restated:** implement Chunk 2 as our own pure module; keep `tournament-pairings` in mind only as a generation reference/shortcut (mind the GPL), and evaluate `brackets-manager`+`brackets-viewer` **holistically** (Chunks 1/2/5) if we ever want one unified ecosystem.
+
 **Files:**
-- **[New]** `lib/ko-bracket-generator.ts` — `computeBracketSize(n)`, `standardSeedOrder(size)`, `assignByes(participants, size)`, `buildBracket(participants, opts)` returning rounds + matches + `nextMatch` links + optional third-place match.
-- **[New]** `lib/__tests__/ko-bracket-generator.test.ts` — unit tests (e.g. 8/12/16 players; verify top seeds get byes; verify the final is reached by exactly one match from each half).
-- **[Edit]** `lib/ko-tournament-fixtures.ts` — regenerate the MVP fixture via the engine.
-- **[Edit]** `app/ko-tournament/page.tsx` — consume engine output.
+- **[New]** `lib/ko-bracket-generator.ts` — `computeBracketSize(n)`, `standardSeedOrder(size)`, `assignByes(participants, size)`, `assignSeeds(participants, method)`, `buildBracket(participants, opts)` returning rounds + matches + `nextMatch` links + optional third-place match. Pure; no Prisma import.
+- **[New]** `scripts/ko-bracket-engine-demo.ts` — explicit-input/output check harness run via `npm run ko:verify-bracket-engine` (`tsx`, already a dependency). Replaces the originally-planned Vitest unit test file since the repo has no test runner configured yet.
+- **[Edit]** `package.json` — added the `ko:verify-bracket-engine` script.
+- **[Edit]** `lib/ko-tournament-fixtures.ts` — added a 4th, engine-generated fixture demonstrating the non-power-of-2 bye path; the original three hand-authored fixtures were left untouched.
+- `app/ko-tournament/page.tsx` — no change needed; it already consumes fixtures generically.
 
 **Not certain about:**
-- ⚠️ Whether a test runner is configured (repo shows no obvious Jest/Vitest config in the reviewed files). If none exists, this chunk includes adding **Vitest** (lightweight, zero-config with the current stack) — *flagged as an assumption to confirm before starting.*
+- ⚠️ ~~Whether a test runner is configured~~ — resolved: no runner exists, and per explicit direction this chunk deliberately does **not** add one (Vitest or otherwise). The check-harness script is the interim substitute; swap in real unit tests if/when a runner is adopted repo-wide.
+- ⚠️ If a library route is ever chosen instead of custom, **GPL-3.0** (`tournament-pairings`) vs **MIT** (`brackets-manager`) licensing must be cleared first.
 
 **Success criteria:**
-- Given any N (1..1024), engine returns a valid bracket; byes go to the top `bracketSize − N` seeds; every non-final match has a correct `nextMatchId`/slot.
-- Unit tests pass for representative sizes.
+- Given any N (2..1024), engine returns a valid bracket; byes go to the top `bracketSize − N` seeds; every non-final match has a correct `nextMatchId`/slot. ✅ verified by the check harness for N ∈ {2,3,4,5,6,7,8,9,11,12,16,20,32}.
+- Engine module imports no Prisma/server-only code (stays pure & portable). ✅
+- `npm run ko:verify-bracket-engine` passes (924/924 checks). Real unit tests remain a TODO once a test runner is chosen for the repo.
 
 ---
 
@@ -261,9 +336,9 @@ Evaluate a candidate library (see [Bracket Library Selection](#bracket-library-s
 **Goal:** Add the five `Knockout*` models (`Tournament`, `Participant`, `Round`, `Match`, `Game`) + enums and a persistence library, following the repo's strict migration workflow (`DATABASE_MIGRATIONS.md`).
 
 **Files:**
-- **[Edit]** `prisma/schema.prisma` — add `KnockoutTournament` (incl. `gamesPerRound`), `KnockoutParticipant`, `KnockoutRound`, `KnockoutMatch`, `KnockoutGame` + enums.
+- **[Edit]** `prisma/schema.prisma` — add `KnockoutTournament` (incl. `gamesPerRound`), `KnockoutParticipant` (**incl. the Chunk 1.2 registration/approval fields: `email?`, `phoneNumber?`, `isApproved`, `registrationDate`, `approvedDate?`**), `KnockoutRound`, `KnockoutMatch`, `KnockoutGame` + enums.
 - **[New]** `prisma/migrations/<timestamp>_add_knockout_tournament/migration.sql` — generated via `npm run db:migrate:dev` (never hand-edited).
-- **[New]** `lib/ko-tournament.ts` — DB service: `createTournament()`, `getTournament(slug)`, `listTournaments()`, `getBracketState(id)`, `persistBracket(engineOutput)`. Bridges the pure engine (Chunk 2) to Prisma.
+- **[New]** `lib/ko-tournament.ts` — DB service: `createTournament()`, `getTournament(slug)`, `listTournaments()`, `getBracketState(id)`, `persistBracket(engineOutput)`, plus participant helpers `registerParticipant()` / `approveParticipant()`. Bridges the pure engine (Chunk 2) to Prisma. Only **approved** participants are passed to the engine.
 - **[Edit]** `prisma/seed.ts` *(or the repo's seed file)* — optional demo KO tournament for local dev. ⚠️ Exact seed filename unverified (`prisma/seed.*`).
 
 **Not certain about:**
@@ -275,24 +350,28 @@ Evaluate a candidate library (see [Bracket Library Selection](#bracket-library-s
 
 ---
 
-### Chunk 4 — Admin: create tournament (settings dialog) + manage participants  ·  **Size: M**
-**Goal:** From the admin KO list, "**New tournament**" opens a **settings dialog (modal)** that prompts for **all settings**; on save the instance is created. Admin can then manage its participant list. The KO analogue of the League's season/players admin.
+### Chunk 4 — Admin: create tournament (settings dialog) + manage/approve participants  ·  **Size: M**
+**Goal:** From the admin KO list, "**New tournament**" opens a **settings dialog (modal)** that prompts for **all settings**; on save the instance is created. Admin can then **manage and approve** its participant list — including **approving the self-registrations from Chunk 1.2**, mirroring the League's player approval. The KO analogue of the League's season/players admin.
 
 **Files:**
-- **[Edit]** `components/admin-navigation.tsx` — add "KO Tournament" nav entry (+ pending-count badge later if useful).
+- **[Edit]** `components/admin-navigation.tsx` — add "KO Tournament" nav entry (+ pending-count badge for unapproved registrations later if useful).
 - **[New]** `app/admin/ko-tournament/page.tsx` — tournament **list/dashboard** with a "New tournament" button that opens the settings dialog.
 - **[New]** `components/ko-tournament/create-tournament-dialog.tsx` — **settings modal**. Fields: name, `gamesPerRound` (select 1/2/4/6…, default 2), seeding method, odd-player handling, third-place toggle, manual-pairings toggle, optional `seasonId`. Two **"Coming soon"** controls rendered **disabled with a badge**: (a) **Format → Double elimination**, (b) **Enable game recording (PGN + broadcast + stats)**.
 - **[New]** `app/admin/ko-tournament/[id]/page.tsx` — tournament detail (status, bracket preview, actions, edit-settings via the same dialog).
-- **[New]** `app/admin/ko-tournament/[id]/participants/page.tsx` — add/remove/seed participants (optionally import from a `Season`).
+- **[New]** `app/admin/ko-tournament/[id]/participants/page.tsx` — participant management: **approve/reject pending registrations** (filter pending/approved), add/remove/seed participants (optionally import from a `Season`). Mirrors `/admin/players`.
+- **[New]** `app/api/ko-tournament/[slug]/register/route.ts` — **public** `POST` for Chunk 1.2 self-registration → creates a `KnockoutParticipant` with `isApproved = false` (guarded so it only accepts submissions while `status = REGISTRATION`). Mirrors `app/api/players/register/route.ts`.
 - **[New]** `app/api/admin/ko-tournament/route.ts` — `GET` list / `POST` create.
 - **[New]** `app/api/admin/ko-tournament/[id]/route.ts` — `GET` / `PATCH` / `DELETE`.
-- **[New]** `app/api/admin/ko-tournament/[id]/participants/route.ts` — participant CRUD.
-- **[Edit]** `lib/validations.ts` — Zod schemas: `knockoutTournamentSchema` (incl. `gamesPerRound` restricted to 1 or even numbers), `knockoutParticipantSchema`.
+- **[New]** `app/api/admin/ko-tournament/[id]/participants/route.ts` — participant CRUD (admin add/remove/seed).
+- **[New]** `app/api/admin/ko-tournament/[id]/participants/[participantId]/approve/route.ts` — **approve** a pending registration (`isApproved = true`, `approvedDate = now`, optional approval email). Mirrors `app/api/admin/players/[id]/approve/route.ts`.
+- **[Edit]** `lib/validations.ts` — Zod schemas: `knockoutTournamentSchema` (incl. `gamesPerRound` restricted to 1 or even numbers), `knockoutParticipantSchema` (admin add).
 
-**Reuse:** admin auth guard pattern from `app/admin/layout.tsx`; React-Hook-Form + Zod modal pattern (like the League's player edit modal); searchable player dropdown component if importing from a Season.
+**Reuse:** admin auth guard pattern from `app/admin/layout.tsx`; the League's **player approval flow** (`isApproved`/`approvedDate` + approve endpoint + approval email) applied to `KnockoutParticipant`; React-Hook-Form + Zod modal pattern; `SearchablePlayerDropdown` if importing from a Season.
 
 **Success criteria:**
-- "New tournament" opens the settings dialog; saving creates an instance that appears in the list; `gamesPerRound` validates to {1, 2, 4, 6, …}; Coming-soon controls are visibly disabled; all endpoints enforce the existing admin session check.
+- "New tournament" opens the settings dialog; saving creates an instance that appears in the list; `gamesPerRound` validates to {1, 2, 4, 6, …}; Coming-soon controls are visibly disabled.
+- Public registration creates a **pending** participant only while `status = REGISTRATION`; the admin can **approve/reject**; only **approved** participants are eligible for seeding/bracket generation (Chunk 7).
+- All admin endpoints enforce the existing admin session check; the public register endpoint is unauthenticated but status-gated and rate-limited/validated.
 
 ---
 
@@ -363,8 +442,9 @@ Chunk 2 (engine) ─────┤                          │
 Chunk 3 (schema) ─> Chunk 4 (admin create) ─> Chunk 5 (results/advance)
 
 Chunk 1.1 (Rules tabs) — standalone, no dependencies
+Chunk 1.2 (registration UI) ─> backend wired by Chunk 3 (fields) + Chunk 4 (endpoints + approval)
 ```
-Chunks 1, 1.1 and 2 are independent and can proceed in parallel. Chunk 1.1 (static Rules content) has no dependency on anything else. Everything from Chunk 4 on depends on Chunk 3.
+Chunks 1, 1.1 and 2 are independent and can proceed in parallel. Chunk 1.1 (static Rules content) has no dependency on anything else. Chunk 1.2 ships the registration **UI** early, but its persistence + admin approval depend on Chunk 3 (participant fields) and Chunk 4 (public register endpoint + approval queue). Everything from Chunk 4 on depends on Chunk 3.
 
 ---
 
@@ -397,6 +477,7 @@ Stay within the existing stack (Next.js 15 App Router, React 19, TailwindCSS 4, 
 **Candidates to evaluate (verify current React 19 support at implementation — do not assume):**
 - `react-brackets` — small, simple, custom `seedComponent`; lightest footprint.
 - `@g-loot/react-tournament-brackets` — richer (single + double elim, SVG viewer, custom `Match`); heavier, styled-components based.
+- `brackets-viewer.js` — the render half of the **`brackets-manager`** ecosystem (see the [Chunk 2 library options](#chunk-2--bracket-engine-pure-functions-unit-tested-no-db)). Not React (imperative/DOM), so it wraps awkwardly in React 19 — but worth a look **only if** we decide to standardise render **+** logic **+** result propagation on that one ecosystem. Otherwise skip.
 - (Shortlist may change — pick by the gates above, not by popularity.)
 
 **Fallback if none passes:** build the custom `bracket-tree.tsx` (CSS grid/flex cards + SVG connector overlay). At that point the **center-converging butterfly** layout becomes viable again (it is just two mirrored one-directional halves with the final between them) and is the more mobile-compact option — revisit it there. Record which path was taken and why.
@@ -494,9 +575,10 @@ Deliberately **out of the core MVP path**; each is independently shippable after
 
 1. **Chunk 1** — Nav switcher + multi-instance overview + MVP bracket (library spike, static) → *reviewable demo*
 1.1 **Chunk 1.1** — Tabs on the Rules page (League + KO), static content → *shippable independently*
-2. **Chunk 2** — Bracket engine + tests → *proven pairing math*
-3. **Chunk 3** — Schema + persistence (incl. `KnockoutGame`, `gamesPerRound`) → *data foundation*
-4. **Chunk 4** — Admin create (settings dialog) + participants
+1.2 **Chunk 1.2** — Participant self-registration UI + "select existing player" (backend wired in Chunk 3/4)
+2. **Chunk 2** — Bracket engine + tests → *proven pairing math* → **done (check harness)**
+3. **Chunk 3** — Schema + persistence (incl. `KnockoutGame`, `gamesPerRound`, participant approval fields) → *data foundation*
+4. **Chunk 4** — Admin create (settings dialog) + manage/**approve** participants + public register endpoint
 5. **Chunk 5** — Admin per-game results + aggregate scoring + winner advancement
 6. **Chunk 6** — Public live overview + bracket
 7. **Chunk 7** — Auto-pairing + manual override

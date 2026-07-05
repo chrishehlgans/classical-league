@@ -17,6 +17,7 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
+    "ko:verify-bracket-engine": "tsx scripts/ko-bracket-engine-demo.ts",
     "postinstall": "prisma generate",
     "vercel-build": "prisma migrate deploy && next build --turbopack"
   },
